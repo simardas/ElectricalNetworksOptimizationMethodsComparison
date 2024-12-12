@@ -8,8 +8,9 @@ from shapely.geometry import LineString
 from shapely.geometry import Point
 import json
 import matplotlib.pyplot as plt
+from concatenation import *
 ############################################
-def plot_electric_network_with_substations(ground_file, air_file, substations_file, substations_file2):
+def plot_electric_network_with_substations(ground_file, air_file, substations_file):
     """
     Trace le réseau électrique en superposant deux types de lignes (aériennes et souterraines) et
     les postes sources en tant que points.
@@ -24,19 +25,19 @@ def plot_electric_network_with_substations(ground_file, air_file, substations_fi
         GeoDataFrames pour les lignes souterraines, aériennes et les postes sources.
     """
     def load_and_filter_lines(csv_file, color, label):
-        bounding_box = {
-            "min_lon": 8.700,
-            "max_lon": 8.760,
-            "min_lat": 41.900,
-            "max_lat": 41.940
+        bounding_box = {  # Belle-Ile
+            "min_lon": -3.260,
+            "max_lon": -3,
+            "min_lat": 47.275,
+            "max_lat": 47.600
         }
 
         try:
-            data = pd.read_csv(csv_file, sep=";")
+            data = pd.read_csv(csv_file, sep=",")
         except Exception as e:
             raise ValueError(f"Erreur lors du chargement du fichier CSV {csv_file} : {e}")
 
-        required_columns = {'statut', 'geo_point_2d', 'geo_shape'}
+        required_columns = {'Code Commune', 'Geo Point', 'Geo Shape'}
         missing_columns = required_columns - set(data.columns)
         if missing_columns:
             raise ValueError(f"Le fichier {csv_file} est invalide. Colonnes manquantes : {missing_columns}")
@@ -45,7 +46,7 @@ def plot_electric_network_with_substations(ground_file, air_file, substations_fi
         filtered_rows = []
         for _, row in data.iterrows():
             try:
-                geo_shape = json.loads(row['geo_shape'])
+                geo_shape = json.loads(row['Geo Shape'])
                 if geo_shape['type'] == 'LineString':
                     line = LineString(geo_shape['coordinates'])
                     if all(
@@ -56,7 +57,7 @@ def plot_electric_network_with_substations(ground_file, air_file, substations_fi
                         geometries.append(line)
                         filtered_rows.append(row)
             except Exception as e:
-                print(f"Ligne ignorée dans {csv_file}: {row['geo_shape']}, erreur : {e}")
+                print(f"Ligne ignorée dans {csv_file}: {row['Geo Shape']}, erreur : {e}")
                 continue
 
         filtered_data = pd.DataFrame(filtered_rows)
@@ -64,88 +65,61 @@ def plot_electric_network_with_substations(ground_file, air_file, substations_fi
         return geo_df
 
     def load_and_filter_substations(substations_file):
-        bounding_box = {
-            "min_lon": 8.700,
-            "max_lon": 8.760,
-            "min_lat": 41.900,
-            "max_lat": 41.940
+        bounding_box = {  # Belle-Ile
+            "min_lon": -3.260,
+            "max_lon": -3,
+            "min_lat": 47.275,
+            "max_lat": 47.600
         }
 
         try:
-            data = pd.read_csv(substations_file, sep=";")
+            data = pd.read_csv(substations_file, sep=",")
         except Exception as e:
             raise ValueError(f"Erreur lors du chargement du fichier CSV {substations_file} : {e}")
 
-        required_columns = {'statut', 'geo_point_2d'}
-        if 'geo_point_2d' not in data.columns:
-            raise ValueError(f"Le fichier {substations_file} est invalide. Colonne `geo_point_2d` manquante.")
+        required_columns = {'Code Commune', 'Geo Point'}
+        if 'Geo Point' not in data.columns:
+            raise ValueError(f"Le fichier {substations_file} est invalide. Colonne `Geo Point` manquante.")
 
         geometries = []
         filtered_rows = []
         for _, row in data.iterrows():
             try:
-                if pd.isna(row['geo_point_2d']) or ',' not in row['geo_point_2d']:
-                    print(f"Ligne ignorée (coordonnées invalides) : {row['geo_point_2d']}")
+                if pd.isna(row['Geo Point']) or ',' not in row['Geo Point']:
+                    print(f"Ligne ignorée (coordonnées invalides) : {row['Geo Point']}")
                     continue
 
-                lat, lon = map(float, row['geo_point_2d'].split(","))
+                lat, lon = map(float, row['Geo Point'].split(","))
                 if bounding_box["min_lon"] <= lon <= bounding_box["max_lon"] and bounding_box["min_lat"] <= lat <= bounding_box["max_lat"]:
                     point = Point(lon, lat)
                     geometries.append(point)
                     filtered_rows.append(row)
             except Exception as e:
-                print(f"Poste source ignoré : {row['geo_point_2d']}, erreur : {e}")
+                print(f"Poste source ignoré : {row['Geo Point']}, erreur : {e}")
                 continue
 
         filtered_data = pd.DataFrame(filtered_rows)
         geo_df = gpd.GeoDataFrame(filtered_data, geometry=geometries, crs="EPSG:4326")
         return geo_df
 
-    # Charger et filtrer les données
     ground_geo_df = load_and_filter_lines(ground_file, color="red", label="Lignes souterraines")
     air_geo_df = load_and_filter_lines(air_file, color="blue", label="Lignes aériennes")
     substations_geo_df = load_and_filter_substations(substations_file)
-    substations_hta_bt_geo_df = load_and_filter_substations(substations_file2)
 
-    # Création du graphe
-    graph = nx.Graph()
-
-    # Ajouter les lignes au graphe
-    for geo_df in [ground_geo_df, air_geo_df]:
-        for _, row in geo_df.iterrows():
-            line = row.geometry
-            start_node = tuple(line.coords[0])
-            end_node = tuple(line.coords[-1])
-            graph.add_node(start_node, statut=row['statut'])
-            graph.add_node(end_node, statut=row['statut'])
-            graph.add_edge(start_node, end_node, statut=row['statut'])
-
-    # Ajouter les postes sources au graphe
-    for _, row in substations_geo_df.iterrows():
-        node = tuple(row.geometry.coords[0])
-        graph.add_node(node, statut=row['statut'])
-
-    # Ajouter les postes sources au graphe
-    for _, row in substations_hta_bt_geo_df.iterrows():
-        node = tuple(row.geometry.coords[0])
-        graph.add_node(node, statut=row['statut'])
-
-    # Tracé des données
     fig, ax = plt.subplots(figsize=(10, 10))
     ground_geo_df.plot(ax=ax, color="red", linewidth=1, label="Lignes souterraines")
     air_geo_df.plot(ax=ax, color="blue", linewidth=1, label="Lignes aériennes")
-    substations_geo_df.plot(ax=ax, color="green", markersize=50, label="Postes sources")
-    substations_hta_bt_geo_df.plot(ax=ax, color="yellox", markersize=50, label="Postes HTA/BT")
+    substations_geo_df.plot(ax=ax, color="green", markersize=50, label="Postes HT/BT")
 
-    # Personnalisation du graphique
     plt.legend()
-    plt.title("Réseau électrique d'Ajaccio avec postes sources")
+    plt.title("Réseau électrique avec postes HTA/BT")
     plt.xlabel("Longitude")
     plt.ylabel("Latitude")
     plt.grid(True)
     plt.show()
 
     return ground_geo_df, air_geo_df, substations_geo_df
+
 #################################################
 def find_intersection_points(file1, file2, output_file):
     """
@@ -199,16 +173,23 @@ def plot_electric_network(ground_file, air_file):
         Charge un fichier CSV, filtre les géométries pour Ajaccio, et renvoie un GeoDataFrame.
         """
         # Définir la bounding box pour Ajaccio
-        bounding_box = {
-            "min_lon": 8.700,  # Longitude minimale
-            "max_lon": 8.750,  # Longitude maximale
-            "min_lat": 41.900,  # Latitude minimale
-            "max_lat": 41.940,  # Latitude maximale
+        # bounding_box = { #Ajaccio
+        #     "min_lon": 8.700,
+        #     "max_lon": 8.760,
+        #     "min_lat": 41.900,
+        #     "max_lat": 41.940
+        # }
+
+        bounding_box = {  # Belle-Ile
+            "min_lon": -3.260,  # Longitude minimale
+            "max_lon": -3.150,  # Longitude maximale
+            "min_lat": 47.280,  # Latitude minimale
+            "max_lat": 47.400  # Latitude maximale
         }
 
         try:
             # Lecture du fichier CSV
-            data = pd.read_csv(csv_file, sep=";")
+            data = pd.read_csv(csv_file, sep=",")
         except Exception as e:
             raise ValueError(f"Erreur lors du chargement du fichier CSV {csv_file} : {e}")
 
@@ -277,11 +258,18 @@ def csv_to_graph_ajaccio(csv_file):
     """
     # Définir la bounding box pour Ajaccio
 
-    bounding_box = {
-        "min_lon": 8.700,  # Longitude minimale
-        "max_lon": 8.750,  # Longitude maximale
-        "min_lat": 41.900,  # Latitude minimale
-        "max_lat": 41.930,  # Latitude maximale
+    # bounding_box = { #Ajaccio
+    #     "min_lon": 8.700,
+    #     "max_lon": 8.760,
+    #     "min_lat": 41.900,
+    #     "max_lat": 41.940
+    # }
+
+    bounding_box = {  # Belle-Ile
+        "min_lon": -3.260,  # Longitude minimale
+        "max_lon": -3.150,  # Longitude maximale
+        "min_lat": 47.280,  # Latitude minimale
+        "max_lat": 47.400  # Latitude maximale
     }
 
     try:
@@ -349,24 +337,28 @@ def csv_to_graph_ajaccio(csv_file):
     return graph, geo_df
 ##################################################
 if __name__ == '__main__':
-    find_intersection_points('hta_air.csv', 'bt_air.csv', 'hta_bt.csv')
-
-    ground_file = "hta_ground.csv"
-    air_file = "hta_air.csv"
-    substations_file = "inputs_hta.csv"
-    substations_file2 = "hta_bt.csv"
+    ground_file = "belleile/hta_ground.csv"
+    air_file = "belleile/hta_air.csv"
+    substations_file = "belleile/postes_hta_bt.csv"
+    print(length(substations_file))
 
     ground_geo_df, air_geo_df, substations_geo_df = plot_electric_network_with_substations(
-        ground_file, air_file, substations_file, substations_file2)
+        ground_file, air_file, substations_file)
 
+    # Save the plot as an SVG
+    fig, ax = plt.subplots(figsize=(10, 10))
+    ground_geo_df.plot(ax=ax, color="red", linewidth=1, label="Lignes souterraines")
+    air_geo_df.plot(ax=ax, color="blue", linewidth=1, label="Lignes aériennes")
+    substations_geo_df.plot(ax=ax, color="green", markersize=50, label="Postes HT/BT")
 
-    # ground_file = "hta_ground.csv"
-    # air_file = "hta_air.csv"
-    #
-    # ground_geo_df, air_geo_df = plot_electric_network(ground_file, air_file)
+    plt.legend()
+    plt.title("Réseau électrique avec postes HTA/BT")
+    plt.xlabel("Longitude")
+    plt.ylabel("Latitude")
+    plt.grid(True)
 
-    #csv_file_path = "hta_air.csv"
-    #graph, geo_df = csv_to_graph_ajaccio(csv_file_path)
+    # Save the figure to SVG
+    plt.savefig("plot.svg", format="svg")
 
-    # Exporter les lignes dans un fichier GeoJSON
-    #geo_df.to_file("lines.geojson", driver="GeoJSON")
+    # Display the plot in the script (optional)
+    plt.show()
